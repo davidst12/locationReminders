@@ -4,13 +4,12 @@ import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
 import android.util.Log
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.firebase.ui.auth.AuthUI
 import com.firebase.ui.auth.IdpResponse
 import com.google.firebase.auth.FirebaseAuth
 import com.udacity.project4.databinding.ActivityAuthenticationBinding
-import com.udacity.project4.databinding.ActivityRemindersBinding
-import com.udacity.project4.locationreminders.ReminderDescriptionActivity
 import com.udacity.project4.locationreminders.RemindersActivity
 
 /**
@@ -72,6 +71,7 @@ class AuthenticationActivity : AppCompatActivity() {
                 // the back button. Otherwise check response.getError().getErrorCode() and handle
                 // the error.
                 Log.i(TAG, "Sign in unsuccessful ${response?.error?.errorCode}")
+                Toast.makeText(this, "Sign in unsuccessful", Toast.LENGTH_SHORT).show()
             }
         }
     }
