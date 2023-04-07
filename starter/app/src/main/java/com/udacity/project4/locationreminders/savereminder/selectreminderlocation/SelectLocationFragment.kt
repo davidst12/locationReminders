@@ -169,8 +169,10 @@ class SelectLocationFragment : BaseFragment(), OnMapReadyCallback {
         // location data layer.
         Log.d(TAG, "onRequestPermissionsResult")
         if (requestCode == REQUEST_LOCATION_PERMISSION) {
-            if (grantResults.size > 0 && (grantResults[0] == PackageManager.PERMISSION_GRANTED)) {
+            if (grantResults.isNotEmpty() && (grantResults[0] == PackageManager.PERMISSION_GRANTED)) {
                 enableMyLocation()
+            }else{
+                _viewModel.showErrorMessage.value = getString(R.string.permission_denied_explanation)
             }
         }
     }
@@ -221,4 +223,3 @@ class SelectLocationFragment : BaseFragment(), OnMapReadyCallback {
 }
 
 private const val REQUEST_LOCATION_PERMISSION = 1
-private const val REQUEST_TURN_DEVICE_LOCATION_ON = 29

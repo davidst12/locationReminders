@@ -26,6 +26,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
     private val TAG = GeofenceBroadcastReceiver::class.java.simpleName
 
     override fun onReceive(context: Context, intent: Intent) {
+        Log.d(TAG, "onReceive")
         if (intent.action == ACTION_GEOFENCE_EVENT) {
             if (GeofencingEvent.fromIntent(intent).hasError()) {
                 Log.e(TAG, "Geofence error in the intent received")

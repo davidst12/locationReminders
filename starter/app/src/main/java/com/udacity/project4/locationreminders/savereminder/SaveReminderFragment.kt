@@ -8,6 +8,8 @@ import android.content.Intent
 import android.content.IntentSender
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
+import android.os.Build.VERSION.SDK_INT
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
@@ -15,6 +17,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.databinding.DataBindingUtil
 import com.google.android.gms.common.api.ResolvableApiException
 import com.google.android.gms.location.*
@@ -34,16 +37,25 @@ class SaveReminderFragment : BaseFragment() {
     //Get the view model this time as a single to be shared with the another fragment
     override val _viewModel: SaveReminderViewModel by inject()
     private lateinit var binding: FragmentSaveReminderBinding
+    private lateinit var locationSettingsSnackBar: Snackbar
+    private lateinit var permissionRequestsSnackBar: Snackbar
 
     // A PendingIntent for the Broadcast Receiver that handles geofence transitions.
+    private val flags =
+        if (SDK_INT >= Build.VERSION_CODES.S) {
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        } else {
+            PendingIntent.FLAG_UPDATE_CURRENT
+        }
     private val geofencePendingIntent: PendingIntent by lazy {
         val intent = Intent(context, GeofenceBroadcastReceiver::class.java)
         intent.action = ACTION_GEOFENCE_EVENT
-        PendingIntent.getBroadcast(context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT)
+        PendingIntent.getBroadcast(context, 0, intent, flags)
     }
     private lateinit var geofencingClient: GeofencingClient
     private val runningQOrLater = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q
     private val TAG = SaveReminderFragment::class.java.simpleName
+    private var geofencePermissionsApproved = false
     private var permissionsRequestedSuccessfully = false
 
 
@@ -94,15 +106,25 @@ class SaveReminderFragment : BaseFragment() {
         _viewModel.onClear()
     }
 
+    override fun onStop() {
+        super.onStop()
+        if(this::locationSettingsSnackBar.isInitialized){
+            locationSettingsSnackBar.dismiss()
+        }
+        if(this::permissionRequestsSnackBar.isInitialized){
+            permissionRequestsSnackBar.dismiss()
+        }
+    }
+
     override fun onStart() {
         super.onStart()
-        checkPermissionsAndStartGeofencing()
+        checkGeofencePermissions()
     }
 
     /**
      * Geofence stuff
      */
-    private fun checkPermissionsAndStartGeofencing() {
+    private fun checkGeofencePermissions() {
         if (foregroundAndBackgroundLocationPermissionApproved()) {
             checkDeviceLocationSettings()
         } else {
@@ -160,6 +182,8 @@ class SaveReminderFragment : BaseFragment() {
 
     /*
      *  Check status of the permissions requested
+     *  First geofence permissions
+     *  Then notification permissions
      */
     override fun onRequestPermissionsResult(
         requestCode: Int,
@@ -168,27 +192,48 @@ class SaveReminderFragment : BaseFragment() {
     ) {
         Log.d(TAG, "onRequestPermissionResult")
 
-        if (
-            grantResults.isEmpty() ||
-            grantResults[LOCATION_PERMISSION_INDEX] == PackageManager.PERMISSION_DENIED ||
-            (requestCode == REQUEST_FOREGROUND_AND_BACKGROUND_PERMISSION_RESULT_CODE &&
-                    grantResults[BACKGROUND_LOCATION_PERMISSION_INDEX] ==
-                    PackageManager.PERMISSION_DENIED))
-        {
-            Snackbar.make(
-                binding.root,
-                R.string.permission_denied_explanation,
-                Snackbar.LENGTH_INDEFINITE
-            )
-                .setAction(R.string.settings) {
+        if(!geofencePermissionsApproved){
+            if (
+                grantResults.isEmpty() ||
+                (requestCode == REQUEST_FOREGROUND_ONLY_PERMISSIONS_REQUEST_CODE &&
+                        grantResults[LOCATION_PERMISSION_INDEX] == PackageManager.PERMISSION_DENIED) ||
+                (requestCode == REQUEST_FOREGROUND_AND_BACKGROUND_PERMISSION_RESULT_CODE &&
+                        grantResults[BACKGROUND_LOCATION_PERMISSION_INDEX] ==
+                        PackageManager.PERMISSION_DENIED))
+            {
+                permissionRequestsSnackBar = Snackbar.make(
+                    binding.root,
+                    R.string.permission_denied_explanation,
+                    Snackbar.LENGTH_INDEFINITE
+                )
+                    .setAction(R.string.settings) {
+                        startActivity(Intent().apply {
+                            action = Settings.ACTION_APPLICATION_DETAILS_SETTINGS
+                            data = Uri.fromParts("package", BuildConfig.APPLICATION_ID, null)
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        })
+                    }
+                permissionRequestsSnackBar.show()
+            } else {
+                checkDeviceLocationSettings()
+            }
+        }else{
+            if (requestCode == NOTIFICATION_PERMISSION_REQUEST_CODE && grantResults[0] != PackageManager.PERMISSION_GRANTED) {
+                permissionRequestsSnackBar = Snackbar.make(
+                    binding.root,
+                    getString(R.string.notification_permission_denied_explanation),
+                    Snackbar.LENGTH_INDEFINITE
+                ).setAction(R.string.settings) {
                     startActivity(Intent().apply {
                         action = Settings.ACTION_APPLICATION_DETAILS_SETTINGS
                         data = Uri.fromParts("package", BuildConfig.APPLICATION_ID, null)
                         flags = Intent.FLAG_ACTIVITY_NEW_TASK
                     })
-                }.show()
-        } else {
-            checkDeviceLocationSettings()
+                }
+                permissionRequestsSnackBar.show()
+            } else {
+                checkNotificationPermission()
+            }
         }
     }
 
@@ -207,8 +252,9 @@ class SaveReminderFragment : BaseFragment() {
         locationSettingsResponseTask.addOnFailureListener { exception ->
             if (exception is ResolvableApiException && resolve){
                 try {
-                    exception.startResolutionForResult(activity,
-                        REQUEST_TURN_DEVICE_LOCATION_ON)
+                    startIntentSenderForResult(exception.resolution.intentSender,
+                        REQUEST_TURN_DEVICE_LOCATION_ON, null,0,0,
+                        0,null)
                 } catch (sendEx: IntentSender.SendIntentException) {
                     Log.d(TAG, "Error getting location settings resolution: " + sendEx.message)
                 }
@@ -223,9 +269,39 @@ class SaveReminderFragment : BaseFragment() {
         }
         locationSettingsResponseTask.addOnCompleteListener {
             if ( it.isSuccessful ) {
-                permissionsRequestedSuccessfully = true
-                Log.i(TAG, "All permissions granted")
+                geofencePermissionsApproved = true
+                Log.i(TAG, "Geofence permissions granted")
+                // Once geofence permission are granted, check notification permission
+                checkNotificationPermission()
             }
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_TURN_DEVICE_LOCATION_ON) {
+            checkDeviceLocationSettings(false)
+        }
+    }
+
+    private fun checkNotificationPermission(){
+        if (SDK_INT >= 33) {
+            if (ContextCompat.checkSelfPermission(
+                    requireContext(),
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                requestPermissions(
+                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                    NOTIFICATION_PERMISSION_REQUEST_CODE
+                )
+            }else{
+                Log.i(TAG, "All permissions granted")
+                permissionsRequestedSuccessfully = true
+            }
+        }else{
+            Log.i(TAG, "All permissions granted")
+            permissionsRequestedSuccessfully = true
         }
     }
 
@@ -273,6 +349,7 @@ val GEOFENCE_EXPIRATION_IN_MILLISECONDS: Long = TimeUnit.HOURS.toMillis(1)
 const val ACTION_GEOFENCE_EVENT = "ACTION_GEOFENCE_EVENT"
 private const val REQUEST_FOREGROUND_AND_BACKGROUND_PERMISSION_RESULT_CODE = 33
 private const val REQUEST_FOREGROUND_ONLY_PERMISSIONS_REQUEST_CODE = 34
+private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 100
 private const val REQUEST_TURN_DEVICE_LOCATION_ON = 29
 private const val LOCATION_PERMISSION_INDEX = 0
 private const val BACKGROUND_LOCATION_PERMISSION_INDEX = 1
